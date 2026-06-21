@@ -70,6 +70,8 @@ This extracted snapshot is backed by the implementation and demo flow in the ori
 - `snapshot/apps/user/http.c`: socket-style HTTP demo app
 - `snapshot/apps/user/net_raw_test.c`: raw Ethernet transmit smoke test
 - `snapshot/Makefile`: QEMU network device and HTTP-forwarding run targets
+- `history/demo_socket_http.sh`: archived demo script restored from project history
+- `history/final_proj.txt`: archived local final-project writeup restored from project history
 
 ## Important Scope Note
 

@@ -1,0 +1,173 @@
+Project title:
+EGOS-2000 Socket Abstraction and Network Server
+
+Author(s):
+CHAK SING HO
+
+Description:
+Reliable TCP/IP communication is a basic part of modern operating systems. This project extends EGOS-2000 with a
+minimal socket-like networking abstraction so user programs can communicate with external hosts using a simple
+connection-oriented interface instead of raw Ethernet packet handling. The implementation is intentionally scoped to
+one listening port and one active connection so the project stays focused on the full end-to-end path rather than a
+full BSD socket subsystem.
+
+The core idea is to move network protocol handling out of the user application and into the EGOS system-service
+layer. The final user-level interface is a thin API:
+- `sock_listen(port)`
+- `sock_accept()`
+- `sock_recv(conn_id, buf, len)`
+- `sock_send(conn_id, buf, len)`
+- `sock_close(conn_id)`
+
+Under the abstraction, the project uses:
+- the QEMU `e1000` Ethernet device for packet I/O
+- the imported `uIP` TCP/IP stack for protocol handling
+- the EGOS message-passing system-service architecture for the socket endpoint service
+
+Setup:
+This project is based on the EGOS-2000 codebase with the later lab features already enabled. In the current
+Makefile, the relevant flags are:
+- `ENABLE_ULT=1`
+- `SCHEDULER=MLFQ`
+- `SYSCALLFUNC=ECALL`
+- `IFVM=VMON`
+- `DISK=SDCARD`
+- `RWFS=RWFSON`
+
+The project builds on labs 3, 4, 5, 6, and 7 because it depends on the scheduler, syscall path, virtual memory,
+SD-card support, and file-system support already present in the repository.
+
+The project starts from commit:
+`cd522359b541a8d16b1c190361820f33b16639ce`
+
+GitHub repository:
+`git@github.com:NEU-CS6640-labs/egos-2k-hans2001.git`
+
+Relevant setup details:
+- The target machine is QEMU `virt`.
+- The network device used for this project is the QEMU `e1000` NIC.
+- The project is developed on the `final` branch.
+- The working QEMU HTTP test path uses:
+  `make -C egos QEMU=/usr/bin/qemu-system-riscv32 qemu-http`
+- The current host-side validation path uses QEMU user-mode networking with:
+  `hostfwd=tcp::8080-:80`
+
+Core implementation:
+`earth/dev_net.c`
+- initializes the QEMU `e1000` device
+- manages the descriptor rings and DMA-visible packet buffers
+- exports the earth-level `net_send` / `net_recv` hooks
+- provides the raw Ethernet packet path used by the higher layers
+
+`apps/system/sys_net.c`
+- implements `GPID_NET`, the EGOS network system service
+- initializes the local `uIP` stack state and host network configuration
+- polls the earth/network-driver receive path
+- routes raw Ethernet frames into `uIP`
+- bridges protocol-stack events into socket-like service state
+- implements the socket request handlers for listen, accept, recv, send, and close
+
+`library/syscall/servers.h` and `library/syscall/servers.c`
+- define the `GPID_NET` request/reply protocol
+- define the socket-like request types:
+  `NET_SOCK_LISTEN`, `NET_SOCK_ACCEPT`, `NET_SOCK_RECV`, `NET_SOCK_SEND`, `NET_SOCK_CLOSE`
+- expose the user-facing wrappers:
+  `sock_listen`, `sock_accept`, `sock_recv`, `sock_send`, `sock_close`
+
+`library/uip/httpd.h` and `library/uip/httpd.c`
+- no longer act as the original user-facing HTTP server
+- are repurposed as a small event bridge between `uIP` and `sys_net`
+- export connection, receive, transmit, and close bridge state so the socket service can observe and drive `uIP`
+
+`apps/user/http.c`
+- has been converted from a raw packet / direct `uIP` driver into a socket-style demo application
+- now uses only the socket abstraction
+- demonstrates the full application-side path:
+  `sock_listen -> sock_accept -> sock_recv -> sock_send -> sock_close`
+
+Current architecture:
+The system is now layered as:
+
+`client`
+-> network
+-> `e1000`
+-> `earth/dev_net.c`
+-> `uIP`
+-> `apps/system/sys_net.c`
+-> `library/syscall/servers.c`
+-> `apps/user/http.c`
+
+This means:
+- `e1000` handles raw Ethernet I/O
+- `uIP` handles ARP/IP/TCP protocol logic
+- `sys_net` translates protocol events into socket-like service semantics
+- the user program only sees a socket-style API
+
+Implemented socket path:
+The current minimal socket abstraction supports one listening port and one active connection.
+
+Implemented behavior:
+- `sock_listen(port)`
+  starts listening on the requested TCP port through `uip_listen(...)`
+- `sock_accept()`
+  returns a connection id when a TCP connection has been established
+- `sock_recv()`
+  returns application payload data received from the client
+- `sock_send()`
+  transmits application payload data back to the client through `uIP`
+- `sock_close()`
+  requests connection shutdown through `uIP`
+
+Benchmarks and validation:
+`net_raw_test`
+- validates the raw packet path through the `e1000` device and `earth/dev_net.c`
+
+`http` socket demo application
+- validates the socket abstraction and protocol-stack integration
+
+Completed validation:
+- raw Ethernet send/receive path through `dev_net.c`
+- `uIP` integration under `sys_net`
+- `sock_listen`
+- `sock_accept`
+- `sock_recv`
+- `sock_send`
+- `sock_close`
+- end-to-end HTTP response delivery from an external host
+
+Verified end-to-end test:
+1. boot the guest with:
+   `make -C egos QEMU=/usr/bin/qemu-system-riscv32 qemu-http`
+2. run `http` inside the guest shell
+3. run on the host:
+   `curl http://127.0.0.1:8080/`
+4. expected result:
+   - HTTP status line `HTTP/1.0 200 OK`
+   - response body `EGOS socket server skeleton`
+
+Evaluation:
+The project is evaluated in two layers:
+
+1. Low-level network correctness
+- the `e1000` packet path can send and receive frames correctly
+
+2. High-level socket abstraction correctness
+- an external host can establish a TCP connection to EGOS
+- a user-space server can accept the connection through the socket-like API
+- the server can receive request data, send response data, and close the connection
+
+Known limitations:
+- the abstraction currently supports only a minimal single-connection model
+- it is not a full BSD socket subsystem
+- `sys_net` still uses a case-driven polling structure instead of a dedicated non-blocking IPC receive loop
+- the `uIP` bridge is intentionally narrow and optimized for the project scope
+
+Next step:
+The next engineering step is not to add new socket features, but to improve structure and presentation:
+- continue modularizing `sys_net.c`
+- optionally add a non-blocking `try_recv` IPC path so network polling can live in the main loop
+- polish documentation and keep the demo and validation path reproducible
+
+Project scope summary:
+This project successfully demonstrates that EGOS-2000 can be extended from local process, terminal, and file
+abstractions into external TCP/IP communication with a thin socket-like interface and a working user-level server.
